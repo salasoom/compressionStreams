@@ -7,6 +7,10 @@
 #include <iomanip>
 
 #include <fstream>
+#include <istream>
+#include <iostream>
+#include <sstream>
+#include <string>
 
 #define NAME_LEN 256
 
@@ -63,10 +67,70 @@ GetMesh(DBfile *dbfile, char const *mname, int &mt)
 
 static void StreamPointmeshOut(DBpointmesh const *m, std::ostream &ostr)
 {
+    // output floating point coordinates
+    ostr << "nnodes = " << m->nels << std::endl;
+    ostr << "ndims = " << m->ndims << std::endl;
+    ostr << "datatype = " << (m->datatype == DB_DOUBLE ? "double" : "float") << std::endl;
+    if (m->datatype == DB_DOUBLE)
+    {
+        double *coords[3] = {(double *) m->coords[0],
+                             (double *) m->coords[1],
+                             (double *) m->coords[2]};
+        ostr << std::setprecision(16);
+        for (int i = 0; i < m->nels; i++)
+        {
+            ostr << coords[0][i];
+            for (int j = 1; j < m->ndims; j++)
+                ostr << " " << coords[j][i];
+            ostr << std::endl;
+        }
+    }
+    else
+    {
+        float *coords[3] = {(float *) m->coords[0],
+                            (float *) m->coords[1],
+                            (float *) m->coords[2]};
+        ostr << std::setprecision(8);
+        for (int i = 0; i < m->nels; i++)
+        {
+            ostr << coords[0][i];
+            for (int j = 1; j < m->ndims; j++)
+                ostr << " " << coords[j][i];
+            ostr << std::endl;
+        }
+    }
 }
+
 static void StreamQuadmeshOut(DBquadmesh const *m, std::ostream &ostr)
 {
+    ostr << "nnodes = " << m->nnodes << std::endl;
+    ostr << "ndims = " << m->ndims << std::endl;
+    ostr << "dims = " << m->dims[0];
+    ostr << "datatype = " << (m->datatype == DB_DOUBLE ? "double" : "float") << std::endl;
+    for (int i = 1; i < m->ndims; i++)
+        ostr << " " << m->dims[i];
+    if (m->coordtype == DB_COLLINEAR)
+    {
+        ostr << "coordtype = collinear" << std::endl;
+        if (m->datatype == DB_DOUBLE)
+        {
+        }
+        else
+        {
+        }
+    }
+    else
+    {
+        ostr << "coordtype = non-collinear" << std::endl;
+        if (m->datatype == DB_DOUBLE)
+        {
+        }
+        else
+        {
+        }
+    }
 }
+
 static void StreamUcdmeshOut(DBucdmesh const *m, std::ostream &ostr)
 {
 
@@ -82,12 +146,17 @@ static void StreamUcdmeshOut(DBucdmesh const *m, std::ostream &ostr)
     {
         int n = 0;
         DBzonelist *zl = m->zones;
+        ostr << "nzones = " << zl->nzones << std::endl;
+        ostr << "nshapes = " << zl->nshapes << std::endl;
         for (int i = 0; i < zl->nshapes; i++)
         {
+            ostr << "shapesize = " << zl->shapesize[i] << std::endl;
+            ostr << "shapetype = " << zl->shapetype[i] << std::endl;
+            ostr << "shapecount = " << zl->shapecnt[i] << std::endl;
             for (int j = 0; j < zl->shapecnt[i]; j++)
             {
-                ostr << zl->shapesize[i];
-                for (int k = 0; k < zl->shapesize[i]; k++)
+                ostr << zl->nodelist[n++];
+                for (int k = 1; k < zl->shapesize[i]; k++)
                     ostr << " " << zl->nodelist[n++];
                 ostr << std::endl;
             }
@@ -95,6 +164,9 @@ static void StreamUcdmeshOut(DBucdmesh const *m, std::ostream &ostr)
     }
 
     // output floating point coordinates
+    ostr << "nnodes = " << m->nnodes << std::endl;
+    ostr << "ndims = " << m->ndims << std::endl;
+    ostr << "datatype = " << (m->datatype == DB_DOUBLE ? "double" : "float") << std::endl;
     if (m->datatype == DB_DOUBLE)
     {
         double *coords[3] = {(double *) m->coords[0],
@@ -139,6 +211,166 @@ StreamMeshOut(int mt, void *mesh, char const *ofile, int gzlevel)
         StreamQuadmeshOut((DBquadmesh*)mesh, meshfile);
 }
 
+// Like a normal string::find() but limit search to maxlen chars
+static size_t shortfind(std::string const &str, std::string const &needle,
+    size_t start, size_t maxlen=100)
+{
+    std::string const &shortstr = str.substr(start, maxlen);
+    size_t n = shortstr.find(needle);
+    if (n == shortstr.npos)
+        return str.npos;
+    return start + n;
+}
+
+static DBpointmesh *StreamPointmeshIn(std::stringstream &istrstrm)
+{
+    std::string const &str = istrstrm.str();
+    DBpointmesh *pm = DBAllocPointmesh();
+    size_t n;
+
+    // read nnodes
+    std::string tagstr = "nnodes = ";
+    n = shortfind(str, tagstr, 0);
+    if (n == str.npos)
+        return 0;
+    istrstrm.seekg(n+tagstr.size());
+    istrstrm >> pm->nels;
+
+    tagstr = "ndims = ";
+    n = shortfind(str, tagstr, n);
+    if (n == str.npos)
+        return 0;
+    istrstrm.seekg(n+tagstr.size());
+    istrstrm >> pm->ndims;
+
+    tagstr = "datatype = ";
+    n = shortfind(str, tagstr, n);
+    if (n == str.npos)
+        return 0;
+    istrstrm.seekg(n+tagstr.size());
+    istrstrm >> tagstr;
+    pm->datatype = (tagstr == "double" ? DB_DOUBLE : DB_FLOAT);
+
+    if (pm->datatype == DB_DOUBLE)
+    {
+        for (int i = 0; i < pm->ndims; i++)
+            pm->coords[i] = (double *) malloc(pm->nels * sizeof(double));
+        for (int i = pm->ndims; i < 3; i++)
+            pm->coords[i] = 0;
+        double *coords[3] = {(double*)pm->coords[0],
+                             (double*)pm->coords[1],
+                             (double*)pm->coords[2]};
+        for (int i = 0; i < pm->nels; i++)
+        {
+            for (int j = 0; j < pm->ndims; j++)
+                istrstrm >> coords[j][i];
+        }
+    }
+    else
+    {
+        for (int i = 0; i < pm->ndims; i++)
+            pm->coords[i] = (float *) malloc(pm->nels * sizeof(float));
+        for (int i = pm->ndims; i < 3; i++)
+            pm->coords[i] = 0;
+        float *coords[3] = {(float*)pm->coords[0],
+                            (float*)pm->coords[1],
+                            (float*)pm->coords[2]};
+        for (int i = 0; i < pm->nels; i++)
+        {
+            for (int j = 0; j < pm->ndims; j++)
+                istrstrm >> coords[j][i];
+        }
+    }
+
+    return pm;
+}
+
+static DBquadmesh *StreamQuadmeshIn(std::stringstream &istrstrm)
+{
+    return 0;
+}
+
+static DBucdmesh *StreamUcdmeshIn(std::stringstream &istrstrm)
+{
+    return 0;
+}
+
+static void *StreamMeshIn(int mt, char const *ifile)
+{
+    // open the input stream
+    std::ifstream meshfile(ifile);
+    std::stringstream meshfilestr;
+    meshfilestr << meshfile.rdbuf(); // not good if large files
+
+    if (mt == DB_POINTMESH)
+        return StreamPointmeshIn(meshfilestr);
+    else if (mt == DB_UCDMESH)
+        return StreamUcdmeshIn(meshfilestr);
+    else
+        return StreamQuadmeshIn(meshfilestr);
+}
+
+static bool ComparePointmesh(DBpointmesh const *pma, DBpointmesh *pmb)
+{
+    if (pma->nels != pmb->nels) return false;
+    if (pma->ndims != pmb->ndims) return false;
+    if (pma->datatype != pmb->datatype) return false;
+    if (pma->datatype == DB_DOUBLE)
+    {
+        double const *coordsa[3] = {(double*)pma->coords[0],
+                                    (double*)pma->coords[1],
+                                    (double*)pma->coords[2]};
+        double const *coordsb[3] = {(double*)pmb->coords[0],
+                                    (double*)pmb->coords[1],
+                                    (double*)pmb->coords[2]};
+        for (int j = 0; j < pma->ndims; j++)
+        {
+            for (int i = 0; i < pma->nels; i++)
+            {
+                if (coordsa[j][i] != coordsb[j][i]) return false;
+            }
+        }
+    }
+    else
+    {
+        float const *coordsa[3] = {(float*)pma->coords[0],
+                                   (float*)pma->coords[1],
+                                   (float*)pma->coords[2]};
+        float const *coordsb[3] = {(float*)pmb->coords[0],
+                                   (float*)pmb->coords[1],
+                                   (float*)pmb->coords[2]};
+        for (int j = 0; j < pma->ndims; j++)
+        {
+            for (int i = 0; i < pma->nels; i++)
+            {
+                if (coordsa[j][i] != coordsb[j][i]) return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+static bool CompareQuadmesh(DBquadmesh const *qma, DBquadmesh *qmb)
+{
+    return false;
+}
+
+static bool CompareUcdmesh(DBucdmesh const *uma, DBucdmesh *umb)
+{
+    return false;
+}
+
+static bool CompareMesh(int mt, void const *mesh, void const *zmesh)
+{
+    if (mt == DB_POINTMESH)
+        return ComparePointmesh((DBpointmesh*)mesh,(DBpointmesh*)zmesh);
+    else if (mt == DB_UCDMESH)
+        return CompareUcdmesh((DBucdmesh*)mesh,(DBucdmesh*)zmesh);
+    else
+        return CompareQuadmesh((DBquadmesh*)mesh,(DBquadmesh*)zmesh);
+}
+
 int main(int argc, char **argv)
 {
 
@@ -163,6 +395,8 @@ int main(int argc, char **argv)
     int *ibuf = 0;
     double *buf = 0;
 
+    strcpy(ofile, "stream_silo_out.txt");
+    strcpy(ifile, "../data/globe_hdf5.silo");
     HANDLE_ARG(ifile,strndup(argv[i]+len2,NAME_LEN), "\"%s\"",set input Silo filename);
     HANDLE_ARG(mname,strndup(argv[i]+len2,NAME_LEN), "\"%s\"",set input Mesh name);
     HANDLE_ARG(ofile,strndup(argv[i]+len2,NAME_LEN), "\"%s\"",set output stream filename);
@@ -190,13 +424,18 @@ int main(int argc, char **argv)
     // just level for now
     StreamMeshOut(mt, mesh, ofile, gzlevel);
 
-#if 0
     // Stream the mesh back in
-    StreamMeshIn(mt, zmesh, ofile);
+    void *zmesh = StreamMeshIn(mt, ofile);
 
     /* compare streamd out/in mesh to original */
-    CompareMesh(mt, mesh, zmesh);
-#endif
+    if (CompareMesh(mt, mesh, zmesh))
+    {
+        std::cout << "Meshes are identical" << std::endl;
+    }
+    else
+    {
+        std::cout << "Meshes FAILED" << std::endl;
+    }
 
     return 0;
 }
